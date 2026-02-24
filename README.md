@@ -27,6 +27,8 @@ SPIFFE node attestation for [Tailscale](https://tailscale.com). A [SPIRE](https:
 
 No challenge/response is needed — verification relies on the Tailscale control plane as the source of truth (similar to how GCP IIT attestation relies on Google's JWKS).
 
+For a full walkthrough of deploying on a real Tailnet (bare metal or containers), see the [Deployment Guide](docs/deployment-guide.md).
+
 ## Building
 
 ```bash
