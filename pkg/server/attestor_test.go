@@ -14,11 +14,13 @@ import (
 
 // mockAPIClient implements TailscaleAPIClient for tests.
 type mockAPIClient struct {
-	device *DeviceInfo
-	err    error
+	device  *DeviceInfo
+	err     error
+	gotID   string // captures the nodeID passed to GetDevice
 }
 
-func (m *mockAPIClient) GetDevice(_ context.Context, _ string) (*DeviceInfo, error) {
+func (m *mockAPIClient) GetDevice(_ context.Context, nodeID string) (*DeviceInfo, error) {
+	m.gotID = nodeID
 	return m.device, m.err
 }
 
@@ -28,11 +30,16 @@ type fakeAttestStream struct {
 	ctx     context.Context
 	request *serverv1.AttestRequest
 	sent    []*serverv1.AttestResponse
+	recvErr error
+	sendErr error
 }
 
 func (f *fakeAttestStream) Context() context.Context { return f.ctx }
 
 func (f *fakeAttestStream) Recv() (*serverv1.AttestRequest, error) {
+	if f.recvErr != nil {
+		return nil, f.recvErr
+	}
 	if f.request == nil {
 		return nil, errors.New("no request")
 	}
@@ -40,6 +47,9 @@ func (f *fakeAttestStream) Recv() (*serverv1.AttestRequest, error) {
 }
 
 func (f *fakeAttestStream) Send(resp *serverv1.AttestResponse) error {
+	if f.sendErr != nil {
+		return f.sendErr
+	}
 	f.sent = append(f.sent, resp)
 	return nil
 }
@@ -60,6 +70,17 @@ func configurePlugin(t *testing.T, p *Plugin, hclConfig string) {
 	})
 	if err != nil {
 		t.Fatalf("Configure failed: %v", err)
+	}
+}
+
+func newStream(payload []byte) *fakeAttestStream {
+	return &fakeAttestStream{
+		ctx: context.Background(),
+		request: &serverv1.AttestRequest{
+			Request: &serverv1.AttestRequest_Payload{
+				Payload: payload,
+			},
+		},
 	}
 }
 
@@ -94,21 +115,15 @@ func fullPayload() common.AttestationPayload {
 	}
 }
 
+// --- Attest: happy paths ---
+
 func TestAttest_Success(t *testing.T) {
 	mock := &mockAPIClient{device: fullDevice()}
 
 	p := &Plugin{apiClient: mock}
 	configurePlugin(t, p, `api_key = "tskey-api-test"`)
 
-	stream := &fakeAttestStream{
-		ctx: context.Background(),
-		request: &serverv1.AttestRequest{
-			Request: &serverv1.AttestRequest_Payload{
-				Payload: makePayload(t, fullPayload()),
-			},
-		},
-	}
-
+	stream := newStream(makePayload(t, fullPayload()))
 	if err := p.Attest(stream); err != nil {
 		t.Fatalf("Attest failed: %v", err)
 	}
@@ -152,6 +167,40 @@ func TestAttest_Success(t *testing.T) {
 			t.Errorf("missing selector %q", s)
 		}
 	}
+	// Verify no extra selectors.
+	if len(attrs.SelectorValues) != len(expectedSelectors) {
+		t.Errorf("selector count = %d, want %d", len(attrs.SelectorValues), len(expectedSelectors))
+	}
+}
+
+func TestAttest_MinimalDevice(t *testing.T) {
+	// Device with only required fields — no tags, addresses, user, etc.
+	mock := &mockAPIClient{
+		device: &DeviceInfo{
+			ID:         "node123",
+			NodeKey:    "nodekey:abc123",
+			Authorized: true,
+		},
+	}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	stream := newStream(makePayload(t, common.AttestationPayload{
+		NodeID:  "node123",
+		NodeKey: "nodekey:abc123",
+	}))
+
+	if err := p.Attest(stream); err != nil {
+		t.Fatalf("Attest failed: %v", err)
+	}
+
+	attrs := stream.sent[0].GetAgentAttributes()
+	// Only node_id selector should exist.
+	if len(attrs.SelectorValues) != 1 {
+		t.Errorf("selector count = %d, want 1 (node_id only), got %v",
+			len(attrs.SelectorValues), attrs.SelectorValues)
+	}
 }
 
 func TestAttest_SelectorsFromAPINotPayload(t *testing.T) {
@@ -173,15 +222,7 @@ func TestAttest_SelectorsFromAPINotPayload(t *testing.T) {
 	p := &Plugin{apiClient: mock}
 	configurePlugin(t, p, `api_key = "tskey-api-test"`)
 
-	stream := &fakeAttestStream{
-		ctx: context.Background(),
-		request: &serverv1.AttestRequest{
-			Request: &serverv1.AttestRequest_Payload{
-				Payload: makePayload(t, payload),
-			},
-		},
-	}
-
+	stream := newStream(makePayload(t, payload))
 	if err := p.Attest(stream); err != nil {
 		t.Fatalf("Attest failed: %v", err)
 	}
@@ -193,199 +234,97 @@ func TestAttest_SelectorsFromAPINotPayload(t *testing.T) {
 	}
 
 	// Must have API-verified values, not agent-claimed values.
-	if selectorMap["hostname:agent-claimed-host"] {
-		t.Error("selector should not contain agent-claimed hostname")
+	agentClaimed := []string{
+		"hostname:agent-claimed-host",
+		"os:agent-claimed-os",
+		"tailnet:agent-claimed-tailnet",
+		"user:999",
+		"tag:tag:agent-claimed",
+		"ip:10.0.0.1",
 	}
-	if !selectorMap["hostname:myhost"] {
-		t.Error("selector should contain API-verified hostname 'myhost'")
+	for _, s := range agentClaimed {
+		if selectorMap[s] {
+			t.Errorf("selector should not contain agent-claimed value %q", s)
+		}
 	}
-	if selectorMap["os:agent-claimed-os"] {
-		t.Error("selector should not contain agent-claimed OS")
+
+	apiVerified := []string{
+		"hostname:myhost",
+		"os:linux",
+		"tailnet:example.com",
+		"user:user@example.com",
 	}
-	if !selectorMap["os:linux"] {
-		t.Error("selector should contain API-verified OS 'linux'")
-	}
-	if !selectorMap["user:user@example.com"] {
-		t.Error("selector should contain API-verified user")
+	for _, s := range apiVerified {
+		if !selectorMap[s] {
+			t.Errorf("selector should contain API-verified value %q", s)
+		}
 	}
 }
 
-func TestAttest_NodeKeyMismatch(t *testing.T) {
-	payload := common.AttestationPayload{
-		NodeID:  "node123",
-		NodeKey: "nodekey:abc123",
-	}
-
-	mock := &mockAPIClient{
-		device: &DeviceInfo{
-			ID:         "node123",
-			NodeKey:    "nodekey:DIFFERENT",
-			Authorized: true,
-		},
-	}
+func TestAttest_PassesNodeIDToAPI(t *testing.T) {
+	mock := &mockAPIClient{device: fullDevice()}
 
 	p := &Plugin{apiClient: mock}
 	configurePlugin(t, p, `api_key = "tskey-api-test"`)
 
-	stream := &fakeAttestStream{
-		ctx: context.Background(),
-		request: &serverv1.AttestRequest{
-			Request: &serverv1.AttestRequest_Payload{
-				Payload: makePayload(t, payload),
-			},
-		},
-	}
+	stream := newStream(makePayload(t, fullPayload()))
+	_ = p.Attest(stream)
 
-	err := p.Attest(stream)
-	if err == nil {
-		t.Fatal("expected error for node key mismatch, got nil")
-	}
-	// Must not leak actual key values in the error message.
-	if strings.Contains(err.Error(), "nodekey:DIFFERENT") {
-		t.Error("error message must not contain the actual API node key")
-	}
-	if strings.Contains(err.Error(), "nodekey:abc123") {
-		t.Error("error message must not contain the agent-claimed node key")
+	if mock.gotID != "node123" {
+		t.Errorf("API called with nodeID = %q, want %q", mock.gotID, "node123")
 	}
 }
 
-func TestAttest_EmptyNodeKey(t *testing.T) {
-	payload := common.AttestationPayload{
-		NodeID:  "node123",
-		NodeKey: "",
-	}
+// --- Attest: custom template ---
 
-	mock := &mockAPIClient{
-		device: &DeviceInfo{
-			ID:         "node123",
-			NodeKey:    "nodekey:abc123",
-			Authorized: true,
-		},
-	}
-
-	p := &Plugin{apiClient: mock}
-	configurePlugin(t, p, `api_key = "tskey-api-test"`)
-
-	stream := &fakeAttestStream{
-		ctx: context.Background(),
-		request: &serverv1.AttestRequest{
-			Request: &serverv1.AttestRequest_Payload{
-				Payload: makePayload(t, payload),
-			},
-		},
-	}
-
-	err := p.Attest(stream)
-	if err == nil {
-		t.Fatal("expected error for empty node key, got nil")
-	}
-}
-
-func TestAttest_UnauthorizedDevice(t *testing.T) {
-	payload := common.AttestationPayload{
-		NodeID:  "node123",
-		NodeKey: "nodekey:abc123",
-	}
-
-	mock := &mockAPIClient{
-		device: &DeviceInfo{
-			ID:         "node123",
-			NodeKey:    "nodekey:abc123",
-			Authorized: false,
-		},
-	}
-
-	p := &Plugin{apiClient: mock}
-	configurePlugin(t, p, `api_key = "tskey-api-test"`)
-
-	stream := &fakeAttestStream{
-		ctx: context.Background(),
-		request: &serverv1.AttestRequest{
-			Request: &serverv1.AttestRequest_Payload{
-				Payload: makePayload(t, payload),
-			},
-		},
-	}
-
-	err := p.Attest(stream)
-	if err == nil {
-		t.Fatal("expected error for unauthorized device, got nil")
-	}
-}
-
-func TestAttest_TailnetNotAllowed(t *testing.T) {
-	// Agent claims "evil.com" but the API returns a different tailnet.
-	// The allow list check must use the API-verified tailnet.
-	payload := common.AttestationPayload{
-		NodeID:      "node123",
-		NodeKey:     "nodekey:abc123",
-		TailnetName: "good.com", // agent lies, claiming an allowed tailnet
-	}
-
-	mock := &mockAPIClient{
-		device: &DeviceInfo{
-			ID:          "node123",
-			NodeKey:     "nodekey:abc123",
-			Authorized:  true,
-			TailnetName: "evil.com", // API says the real tailnet is evil.com
-		},
-	}
+func TestAttest_CustomPathTemplate(t *testing.T) {
+	mock := &mockAPIClient{device: fullDevice()}
 
 	p := &Plugin{apiClient: mock}
 	configurePlugin(t, p, `
 		api_key = "tskey-api-test"
-		tailnet_allow_list = ["good.com", "also-good.com"]
+		agent_path_template = "/custom/{{ .Hostname }}/{{ .NodeID }}"
 	`)
 
-	stream := &fakeAttestStream{
-		ctx: context.Background(),
-		request: &serverv1.AttestRequest{
-			Request: &serverv1.AttestRequest_Payload{
-				Payload: makePayload(t, payload),
-			},
-		},
-	}
-
-	err := p.Attest(stream)
-	if err == nil {
-		t.Fatal("expected error for tailnet not in allow list, got nil")
-	}
-}
-
-func TestAttest_TailnetAllowed(t *testing.T) {
-	payload := common.AttestationPayload{
-		NodeID:  "node123",
-		NodeKey: "nodekey:abc123",
-	}
-
-	mock := &mockAPIClient{
-		device: &DeviceInfo{
-			ID:          "node123",
-			NodeKey:     "nodekey:abc123",
-			Authorized:  true,
-			TailnetName: "good.com",
-		},
-	}
-
-	p := &Plugin{apiClient: mock}
-	configurePlugin(t, p, `
-		api_key = "tskey-api-test"
-		tailnet_allow_list = ["good.com"]
-	`)
-
-	stream := &fakeAttestStream{
-		ctx: context.Background(),
-		request: &serverv1.AttestRequest{
-			Request: &serverv1.AttestRequest_Payload{
-				Payload: makePayload(t, payload),
-			},
-		},
-	}
-
+	stream := newStream(makePayload(t, fullPayload()))
 	if err := p.Attest(stream); err != nil {
-		t.Fatalf("Attest should succeed for allowed tailnet: %v", err)
+		t.Fatalf("Attest failed: %v", err)
+	}
+
+	attrs := stream.sent[0].GetAgentAttributes()
+	expected := "/custom/myhost/node123"
+	if attrs.SpiffeId != expected {
+		t.Errorf("SpiffeId = %q, want %q", attrs.SpiffeId, expected)
 	}
 }
+
+func TestAttest_TemplateUsesAPIData(t *testing.T) {
+	// Agent claims hostname "agent-host" but API says "api-host".
+	// The template should use the API value.
+	device := fullDevice()
+	device.Hostname = "api-host"
+	mock := &mockAPIClient{device: device}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `
+		api_key = "tskey-api-test"
+		agent_path_template = "/spire/agent/{{ .Hostname }}"
+	`)
+
+	payload := fullPayload()
+	payload.Hostname = "agent-host"
+	stream := newStream(makePayload(t, payload))
+	if err := p.Attest(stream); err != nil {
+		t.Fatalf("Attest failed: %v", err)
+	}
+
+	attrs := stream.sent[0].GetAgentAttributes()
+	if attrs.SpiffeId != "/spire/agent/api-host" {
+		t.Errorf("SpiffeId = %q, want /spire/agent/api-host", attrs.SpiffeId)
+	}
+}
+
+// --- Attest: reattestation ---
 
 func TestAttest_AllowReattestation(t *testing.T) {
 	mock := &mockAPIClient{
@@ -402,17 +341,10 @@ func TestAttest_AllowReattestation(t *testing.T) {
 		allow_reattestation = true
 	`)
 
-	stream := &fakeAttestStream{
-		ctx: context.Background(),
-		request: &serverv1.AttestRequest{
-			Request: &serverv1.AttestRequest_Payload{
-				Payload: makePayload(t, common.AttestationPayload{
-					NodeID:  "node123",
-					NodeKey: "nodekey:abc123",
-				}),
-			},
-		},
-	}
+	stream := newStream(makePayload(t, common.AttestationPayload{
+		NodeID:  "node123",
+		NodeKey: "nodekey:abc123",
+	}))
 
 	if err := p.Attest(stream); err != nil {
 		t.Fatalf("Attest failed: %v", err)
@@ -424,25 +356,189 @@ func TestAttest_AllowReattestation(t *testing.T) {
 	}
 }
 
-func TestAttest_APIError(t *testing.T) {
+// --- Attest: tailnet allow list ---
+
+func TestAttest_TailnetNotAllowed(t *testing.T) {
 	payload := common.AttestationPayload{
-		NodeID:  "node123",
-		NodeKey: "nodekey:abc123",
+		NodeID:      "node123",
+		NodeKey:     "nodekey:abc123",
+		TailnetName: "good.com", // agent lies
 	}
 
+	mock := &mockAPIClient{
+		device: &DeviceInfo{
+			ID:          "node123",
+			NodeKey:     "nodekey:abc123",
+			Authorized:  true,
+			TailnetName: "evil.com", // API truth
+		},
+	}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `
+		api_key = "tskey-api-test"
+		tailnet_allow_list = ["good.com", "also-good.com"]
+	`)
+
+	stream := newStream(makePayload(t, payload))
+	err := p.Attest(stream)
+	if err == nil {
+		t.Fatal("expected error for tailnet not in allow list, got nil")
+	}
+}
+
+func TestAttest_TailnetAllowed(t *testing.T) {
+	mock := &mockAPIClient{
+		device: &DeviceInfo{
+			ID:          "node123",
+			NodeKey:     "nodekey:abc123",
+			Authorized:  true,
+			TailnetName: "good.com",
+		},
+	}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `
+		api_key = "tskey-api-test"
+		tailnet_allow_list = ["good.com"]
+	`)
+
+	stream := newStream(makePayload(t, common.AttestationPayload{
+		NodeID:  "node123",
+		NodeKey: "nodekey:abc123",
+	}))
+
+	if err := p.Attest(stream); err != nil {
+		t.Fatalf("Attest should succeed for allowed tailnet: %v", err)
+	}
+}
+
+func TestAttest_EmptyAllowListAllowsAll(t *testing.T) {
+	mock := &mockAPIClient{
+		device: &DeviceInfo{
+			ID:          "node123",
+			NodeKey:     "nodekey:abc123",
+			Authorized:  true,
+			TailnetName: "any-tailnet.com",
+		},
+	}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	stream := newStream(makePayload(t, common.AttestationPayload{
+		NodeID:  "node123",
+		NodeKey: "nodekey:abc123",
+	}))
+
+	if err := p.Attest(stream); err != nil {
+		t.Fatalf("empty allow list should allow all tailnets: %v", err)
+	}
+}
+
+// --- Attest: error paths ---
+
+func TestAttest_NodeKeyMismatch(t *testing.T) {
+	mock := &mockAPIClient{
+		device: &DeviceInfo{
+			ID:         "node123",
+			NodeKey:    "nodekey:DIFFERENT",
+			Authorized: true,
+		},
+	}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	stream := newStream(makePayload(t, common.AttestationPayload{
+		NodeID:  "node123",
+		NodeKey: "nodekey:abc123",
+	}))
+
+	err := p.Attest(stream)
+	if err == nil {
+		t.Fatal("expected error for node key mismatch, got nil")
+	}
+	// Must not leak actual key values.
+	if strings.Contains(err.Error(), "nodekey:DIFFERENT") {
+		t.Error("error message must not contain the actual API node key")
+	}
+	if strings.Contains(err.Error(), "nodekey:abc123") {
+		t.Error("error message must not contain the agent-claimed node key")
+	}
+}
+
+func TestAttest_EmptyNodeKey(t *testing.T) {
+	mock := &mockAPIClient{
+		device: &DeviceInfo{ID: "node123", NodeKey: "nodekey:abc123", Authorized: true},
+	}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	stream := newStream(makePayload(t, common.AttestationPayload{
+		NodeID:  "node123",
+		NodeKey: "",
+	}))
+
+	err := p.Attest(stream)
+	if err == nil {
+		t.Fatal("expected error for empty node key, got nil")
+	}
+}
+
+func TestAttest_EmptyNodeID(t *testing.T) {
+	mock := &mockAPIClient{
+		device: &DeviceInfo{ID: "node123", NodeKey: "nodekey:abc123", Authorized: true},
+	}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	stream := newStream(makePayload(t, common.AttestationPayload{
+		NodeID:  "",
+		NodeKey: "nodekey:abc123",
+	}))
+
+	err := p.Attest(stream)
+	if err == nil {
+		t.Fatal("expected error for empty node ID, got nil")
+	}
+}
+
+func TestAttest_UnauthorizedDevice(t *testing.T) {
+	mock := &mockAPIClient{
+		device: &DeviceInfo{
+			ID:         "node123",
+			NodeKey:    "nodekey:abc123",
+			Authorized: false,
+		},
+	}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	stream := newStream(makePayload(t, common.AttestationPayload{
+		NodeID:  "node123",
+		NodeKey: "nodekey:abc123",
+	}))
+
+	err := p.Attest(stream)
+	if err == nil {
+		t.Fatal("expected error for unauthorized device, got nil")
+	}
+}
+
+func TestAttest_APIError(t *testing.T) {
 	mock := &mockAPIClient{err: errors.New("API unreachable")}
 
 	p := &Plugin{apiClient: mock}
 	configurePlugin(t, p, `api_key = "tskey-api-test"`)
 
-	stream := &fakeAttestStream{
-		ctx: context.Background(),
-		request: &serverv1.AttestRequest{
-			Request: &serverv1.AttestRequest_Payload{
-				Payload: makePayload(t, payload),
-			},
-		},
-	}
+	stream := newStream(makePayload(t, common.AttestationPayload{
+		NodeID:  "node123",
+		NodeKey: "nodekey:abc123",
+	}))
 
 	err := p.Attest(stream)
 	if err == nil {
@@ -452,18 +548,108 @@ func TestAttest_APIError(t *testing.T) {
 
 func TestAttest_NotConfigured(t *testing.T) {
 	p := &Plugin{}
-	stream := &fakeAttestStream{
-		ctx: context.Background(),
-		request: &serverv1.AttestRequest{
-			Request: &serverv1.AttestRequest_Payload{
-				Payload: []byte(`{}`),
-			},
-		},
-	}
+	stream := newStream([]byte(`{}`))
 
 	err := p.Attest(stream)
 	if err == nil {
 		t.Fatal("expected error when not configured, got nil")
+	}
+}
+
+func TestAttest_InvalidPayloadJSON(t *testing.T) {
+	mock := &mockAPIClient{device: fullDevice()}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	stream := newStream([]byte(`{not valid json`))
+	err := p.Attest(stream)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON, got nil")
+	}
+}
+
+func TestAttest_NilPayload(t *testing.T) {
+	mock := &mockAPIClient{device: fullDevice()}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	stream := &fakeAttestStream{
+		ctx: context.Background(),
+		request: &serverv1.AttestRequest{
+			// No payload set — the oneof is empty.
+		},
+	}
+	err := p.Attest(stream)
+	if err == nil {
+		t.Fatal("expected error for nil payload, got nil")
+	}
+}
+
+func TestAttest_RecvError(t *testing.T) {
+	mock := &mockAPIClient{device: fullDevice()}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	stream := &fakeAttestStream{
+		ctx:     context.Background(),
+		recvErr: errors.New("stream recv failed"),
+	}
+	err := p.Attest(stream)
+	if err == nil {
+		t.Fatal("expected error when Recv fails, got nil")
+	}
+}
+
+func TestAttest_SendError(t *testing.T) {
+	mock := &mockAPIClient{device: fullDevice()}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	stream := &fakeAttestStream{
+		ctx: context.Background(),
+		request: &serverv1.AttestRequest{
+			Request: &serverv1.AttestRequest_Payload{
+				Payload: makePayload(t, fullPayload()),
+			},
+		},
+		sendErr: errors.New("stream send failed"),
+	}
+	err := p.Attest(stream)
+	if err == nil {
+		t.Fatal("expected error when Send fails, got nil")
+	}
+}
+
+// --- Configure ---
+
+func TestConfigure_APIKeyAuth(t *testing.T) {
+	p := &Plugin{}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	if p.config.APIKey != "tskey-api-test" {
+		t.Errorf("APIKey = %q, want %q", p.config.APIKey, "tskey-api-test")
+	}
+	if p.apiClient == nil {
+		t.Fatal("expected apiClient to be created")
+	}
+}
+
+func TestConfigure_OAuthAuth(t *testing.T) {
+	p := &Plugin{}
+	configurePlugin(t, p, `
+		oauth_client_id     = "test-client-id"
+		oauth_client_secret = "test-client-secret"
+	`)
+
+	if p.config.OAuthClientID != "test-client-id" {
+		t.Errorf("OAuthClientID = %q, want %q", p.config.OAuthClientID, "test-client-id")
+	}
+	if p.apiClient == nil {
+		t.Fatal("expected apiClient to be created")
 	}
 }
 
@@ -477,6 +663,16 @@ func TestConfigure_MissingAuth(t *testing.T) {
 	}
 }
 
+func TestConfigure_OAuthMissingSecret(t *testing.T) {
+	p := &Plugin{}
+	_, err := p.Configure(context.Background(), &configv1.ConfigureRequest{
+		HclConfiguration: `oauth_client_id = "test-id"`,
+	})
+	if err == nil {
+		t.Fatal("expected error when oauth_client_secret is missing, got nil")
+	}
+}
+
 func TestConfigure_InvalidHCL(t *testing.T) {
 	p := &Plugin{}
 	_, err := p.Configure(context.Background(), &configv1.ConfigureRequest{
@@ -484,5 +680,18 @@ func TestConfigure_InvalidHCL(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid HCL, got nil")
+	}
+}
+
+func TestConfigure_InvalidTemplate(t *testing.T) {
+	p := &Plugin{}
+	_, err := p.Configure(context.Background(), &configv1.ConfigureRequest{
+		HclConfiguration: `
+			api_key = "tskey-api-test"
+			agent_path_template = "{{ .Invalid | bad"
+		`,
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid template, got nil")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -94,6 +95,9 @@ func (f *Fetcher) CreateAuthKey(req AuthKeyRequest) (*AuthKeyResponse, error) {
 	tailnet := req.Tailnet
 	if tailnet == "" {
 		tailnet = "-" // default tailnet
+	}
+	if strings.Contains(tailnet, "/") || strings.Contains(tailnet, "..") {
+		return nil, fmt.Errorf("invalid tailnet name: %q", tailnet)
 	}
 
 	apiReq := apiKeyRequest{
