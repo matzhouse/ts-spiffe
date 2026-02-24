@@ -1,0 +1,9 @@
+NodeAttestor "tailscale" {
+    plugin_cmd = "/path/to/nodeattestor-tailscale-agent"
+    plugin_checksum = ""
+    plugin_data {
+        # Optional: path to the tailscaled Unix socket.
+        # Defaults to the standard location if omitted.
+        # socket_path = "/var/run/tailscale/tailscaled.sock"
+    }
+}

@@ -1,0 +1,24 @@
+NodeAttestor "tailscale" {
+    plugin_cmd = "/path/to/nodeattestor-tailscale-server"
+    plugin_checksum = ""
+    plugin_data {
+        # Authentication: use either a static API key or OAuth client credentials.
+
+        # Option 1: Static API key (for dev/testing)
+        # api_key = "tskey-api-..."
+
+        # Option 2: OAuth client credentials (recommended for production)
+        # oauth_client_id     = "your-client-id"
+        # oauth_client_secret = "your-client-secret"
+
+        # Optional: restrict attestation to specific tailnets.
+        # tailnet_allow_list = ["example.com"]
+
+        # Optional: custom SPIFFE ID path template.
+        # Default: /spire/agent/tailscale/{{ .TailnetName }}/{{ .NodeID }}
+        # agent_path_template = "/spire/agent/tailscale/{{ .TailnetName }}/{{ .NodeID }}"
+
+        # Optional: allow nodes to re-attest (default: false = TOFU).
+        # allow_reattestation = false
+    }
+}
