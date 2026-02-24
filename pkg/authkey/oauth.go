@@ -84,13 +84,15 @@ func (c *OAuthClient) Token() (string, error) {
 	}
 	defer resp.Body.Close()
 
+	limitedBody := io.LimitReader(resp.Body, 1<<20) // 1 MB limit
+
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(limitedBody)
 		return "", fmt.Errorf("token request returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var tokenResp tokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+	if err := json.NewDecoder(limitedBody).Decode(&tokenResp); err != nil {
 		return "", fmt.Errorf("failed to decode token response: %w", err)
 	}
 	if tokenResp.AccessToken == "" {

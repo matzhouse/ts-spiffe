@@ -227,6 +227,32 @@ func TestAidAttestation_NotConfigured(t *testing.T) {
 	}
 }
 
+func TestAidAttestation_EmptyNodeID(t *testing.T) {
+	st := fullStatus()
+	st.Self.ID = "" // empty stable ID
+	mock := &mockStatusGetter{status: st}
+
+	p := &Plugin{tsClient: mock, config: &Config{}}
+	stream := &fakeStream{ctx: context.Background()}
+	err := p.AidAttestation(stream)
+	if err == nil {
+		t.Fatal("expected error for empty node ID, got nil")
+	}
+}
+
+func TestAidAttestation_ZeroNodeKey(t *testing.T) {
+	st := fullStatus()
+	st.Self.PublicKey = key.NodePublic{} // zero key
+	mock := &mockStatusGetter{status: st}
+
+	p := &Plugin{tsClient: mock, config: &Config{}}
+	stream := &fakeStream{ctx: context.Background()}
+	err := p.AidAttestation(stream)
+	if err == nil {
+		t.Fatal("expected error for zero node key, got nil")
+	}
+}
+
 func TestAidAttestation_NilClient(t *testing.T) {
 	// Config is set but tsClient is nil (edge case).
 	p := &Plugin{config: &Config{}}

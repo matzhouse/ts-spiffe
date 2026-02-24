@@ -36,6 +36,8 @@ type Plugin struct {
 
 // SetLogger implements the pluginsdk.NeedsLogger interface.
 func (p *Plugin) SetLogger(logger hclog.Logger) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.logger = logger
 }
 
@@ -84,6 +86,13 @@ func (p *Plugin) AidAttestation(stream agentv1.NodeAttestor_AidAttestationServer
 	}
 
 	self := st.Self
+
+	if string(self.ID) == "" {
+		return status.Error(codes.Internal, "tailscale status has empty node ID")
+	}
+	if self.PublicKey.IsZero() {
+		return status.Error(codes.Internal, "tailscale status has zero node key")
+	}
 
 	// Build IP list.
 	var ips []string

@@ -12,9 +12,7 @@ import (
 
 const defaultAPIBase = "https://api.tailscale.com/api/v2"
 
-// defaultHTTPClient is used for all outbound HTTP calls. It has a reasonable
-// timeout to prevent indefinite hangs against the Tailscale API.
-var defaultHTTPClient = &http.Client{Timeout: 30 * time.Second}
+const defaultHTTPTimeout = 30 * time.Second
 
 // DeviceInfo represents the relevant fields from the Tailscale API device response.
 type DeviceInfo struct {

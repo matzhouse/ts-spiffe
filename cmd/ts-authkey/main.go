@@ -28,7 +28,12 @@ func main() {
 
 	var tags []string
 	if *tagsStr != "" {
-		tags = strings.Split(*tagsStr, ",")
+		for _, t := range strings.Split(*tagsStr, ",") {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				tags = append(tags, t)
+			}
+		}
 	}
 
 	oauthClient := authkey.NewOAuthClient(*clientID, *clientSecret)

@@ -624,6 +624,33 @@ func TestAttest_SendError(t *testing.T) {
 	}
 }
 
+func TestAttest_InvalidRenderedPath(t *testing.T) {
+	mock := &mockAPIClient{device: fullDevice()}
+
+	p := &Plugin{apiClient: mock}
+	// Template that produces a path without leading slash.
+	configurePlugin(t, p, `
+		api_key = "tskey-api-test"
+		agent_path_template = "no-leading-slash/{{ .NodeID }}"
+	`)
+
+	stream := &fakeAttestStream{
+		ctx: context.Background(),
+		request: &serverv1.AttestRequest{
+			Request: &serverv1.AttestRequest_Payload{
+				Payload: makePayload(t, fullPayload()),
+			},
+		},
+	}
+	err := p.Attest(stream)
+	if err == nil {
+		t.Fatal("expected error for path without leading slash, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid SPIFFE ID path") {
+		t.Errorf("error = %v, want mention of invalid SPIFFE ID path", err)
+	}
+}
+
 // --- Configure ---
 
 func TestConfigure_APIKeyAuth(t *testing.T) {

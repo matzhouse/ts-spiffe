@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"strings"
 	"sync"
 	"text/template"
 
@@ -93,7 +95,7 @@ func (p *Plugin) Configure(_ context.Context, req *configv1.ConfigureRequest) (*
 			tokenFunc = func() (string, error) { return apiKey, nil }
 		}
 		p.apiClient = &httpAPIClient{
-			httpClient: defaultHTTPClient,
+			httpClient: &http.Client{Timeout: defaultHTTPTimeout},
 			tokenFunc:  tokenFunc,
 		}
 	}
@@ -206,6 +208,11 @@ func (p *Plugin) Attest(stream serverv1.NodeAttestor_AttestServer) error {
 		return status.Errorf(codes.Internal, "failed to execute agent path template: %v", err)
 	}
 	agentPath := pathBuf.String()
+
+	// Validate the rendered SPIFFE ID path.
+	if agentPath == "" || !strings.HasPrefix(agentPath, "/") {
+		return status.Errorf(codes.Internal, "agent path template produced invalid SPIFFE ID path: %q", agentPath)
+	}
 
 	// Build selectors from API-verified device data.
 	var selectors []string
