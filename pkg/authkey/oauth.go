@@ -1,6 +1,7 @@
 package authkey
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -61,7 +62,7 @@ type tokenResponse struct {
 }
 
 // Token returns a valid access token, refreshing if expired or near expiry.
-func (c *OAuthClient) Token() (string, error) {
+func (c *OAuthClient) Token(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -71,7 +72,7 @@ func (c *OAuthClient) Token() (string, error) {
 	}
 
 	body := strings.NewReader("grant_type=client_credentials")
-	req, err := http.NewRequest(http.MethodPost, c.tokenURL, body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.tokenURL, body)
 	if err != nil {
 		return "", fmt.Errorf("failed to create token request: %w", err)
 	}

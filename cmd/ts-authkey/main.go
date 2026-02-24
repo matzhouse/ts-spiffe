@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -39,7 +40,7 @@ func main() {
 	oauthClient := authkey.NewOAuthClient(*clientID, *clientSecret)
 	fetcher := authkey.NewFetcher(oauthClient.Token)
 
-	resp, err := fetcher.CreateAuthKey(authkey.AuthKeyRequest{
+	resp, err := fetcher.CreateAuthKey(context.Background(), authkey.AuthKeyRequest{
 		Tailnet:       *tailnet,
 		Ephemeral:     *ephemeral,
 		Preauthorized: *preauthorized,

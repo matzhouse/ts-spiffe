@@ -1,6 +1,7 @@
 package authkey
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -62,12 +63,12 @@ func TestFetcher_CreateAuthKey_Success(t *testing.T) {
 	defer srv.Close()
 
 	fetcher := NewFetcher(
-		func() (string, error) { return "test-token", nil },
+		func(context.Context) (string, error) { return "test-token", nil },
 		WithAPIBase(srv.URL+"/api/v2"),
 		WithFetcherHTTPClient(srv.Client()),
 	)
 
-	resp, err := fetcher.CreateAuthKey(AuthKeyRequest{
+	resp, err := fetcher.CreateAuthKey(context.Background(), AuthKeyRequest{
 		Tailnet:       "example.com",
 		Ephemeral:     true,
 		Preauthorized: true,
@@ -115,12 +116,12 @@ func TestFetcher_CreateAuthKey_NonEphemeral(t *testing.T) {
 	defer srv.Close()
 
 	fetcher := NewFetcher(
-		func() (string, error) { return "test-token", nil },
+		func(context.Context) (string, error) { return "test-token", nil },
 		WithAPIBase(srv.URL+"/api/v2"),
 		WithFetcherHTTPClient(srv.Client()),
 	)
 
-	resp, err := fetcher.CreateAuthKey(AuthKeyRequest{
+	resp, err := fetcher.CreateAuthKey(context.Background(), AuthKeyRequest{
 		Tailnet:       "example.com",
 		Ephemeral:     false,
 		Preauthorized: false,
@@ -149,12 +150,12 @@ func TestFetcher_CreateAuthKey_DefaultTailnet(t *testing.T) {
 	defer srv.Close()
 
 	fetcher := NewFetcher(
-		func() (string, error) { return "test-token", nil },
+		func(context.Context) (string, error) { return "test-token", nil },
 		WithAPIBase(srv.URL+"/api/v2"),
 		WithFetcherHTTPClient(srv.Client()),
 	)
 
-	resp, err := fetcher.CreateAuthKey(AuthKeyRequest{
+	resp, err := fetcher.CreateAuthKey(context.Background(), AuthKeyRequest{
 		Tags: []string{"tag:container"},
 	})
 	if err != nil {
@@ -167,7 +168,7 @@ func TestFetcher_CreateAuthKey_DefaultTailnet(t *testing.T) {
 
 func TestFetcher_CreateAuthKey_TailnetPathEscaping(t *testing.T) {
 	fetcher := NewFetcher(
-		func() (string, error) { return "test-token", nil },
+		func(context.Context) (string, error) { return "test-token", nil },
 	)
 
 	cases := []struct {
@@ -181,7 +182,7 @@ func TestFetcher_CreateAuthKey_TailnetPathEscaping(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := fetcher.CreateAuthKey(AuthKeyRequest{
+			_, err := fetcher.CreateAuthKey(context.Background(), AuthKeyRequest{
 				Tailnet: tc.tailnet,
 				Tags:    []string{"tag:test"},
 			})
@@ -203,12 +204,12 @@ func TestFetcher_CreateAuthKey_APIError(t *testing.T) {
 	defer srv.Close()
 
 	fetcher := NewFetcher(
-		func() (string, error) { return "test-token", nil },
+		func(context.Context) (string, error) { return "test-token", nil },
 		WithAPIBase(srv.URL+"/api/v2"),
 		WithFetcherHTTPClient(srv.Client()),
 	)
 
-	_, err := fetcher.CreateAuthKey(AuthKeyRequest{
+	_, err := fetcher.CreateAuthKey(context.Background(), AuthKeyRequest{
 		Tailnet: "example.com",
 		Tags:    []string{"tag:container"},
 	})
@@ -222,10 +223,10 @@ func TestFetcher_CreateAuthKey_APIError(t *testing.T) {
 
 func TestFetcher_CreateAuthKey_TokenError(t *testing.T) {
 	fetcher := NewFetcher(
-		func() (string, error) { return "", errors.New("oauth failed") },
+		func(context.Context) (string, error) { return "", errors.New("oauth failed") },
 	)
 
-	_, err := fetcher.CreateAuthKey(AuthKeyRequest{
+	_, err := fetcher.CreateAuthKey(context.Background(), AuthKeyRequest{
 		Tailnet: "example.com",
 		Tags:    []string{"tag:container"},
 	})
@@ -245,12 +246,12 @@ func TestFetcher_CreateAuthKey_MalformedJSON(t *testing.T) {
 	defer srv.Close()
 
 	fetcher := NewFetcher(
-		func() (string, error) { return "test-token", nil },
+		func(context.Context) (string, error) { return "test-token", nil },
 		WithAPIBase(srv.URL+"/api/v2"),
 		WithFetcherHTTPClient(srv.Client()),
 	)
 
-	_, err := fetcher.CreateAuthKey(AuthKeyRequest{
+	_, err := fetcher.CreateAuthKey(context.Background(), AuthKeyRequest{
 		Tailnet: "example.com",
 		Tags:    []string{"tag:container"},
 	})
@@ -260,7 +261,7 @@ func TestFetcher_CreateAuthKey_MalformedJSON(t *testing.T) {
 }
 
 func TestNewFetcher_Defaults(t *testing.T) {
-	fetcher := NewFetcher(func() (string, error) { return "", nil })
+	fetcher := NewFetcher(func(context.Context) (string, error) { return "", nil })
 
 	if fetcher.apiBase != defaultAPIBase {
 		t.Errorf("apiBase = %q, want %q", fetcher.apiBase, defaultAPIBase)
@@ -276,7 +277,7 @@ func TestNewFetcher_Defaults(t *testing.T) {
 func TestNewFetcher_WithOptions(t *testing.T) {
 	customClient := &http.Client{Timeout: 5 * time.Second}
 	fetcher := NewFetcher(
-		func() (string, error) { return "", nil },
+		func(context.Context) (string, error) { return "", nil },
 		WithAPIBase("https://custom.example.com/api"),
 		WithFetcherHTTPClient(customClient),
 	)

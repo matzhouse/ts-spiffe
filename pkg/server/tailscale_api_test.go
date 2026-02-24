@@ -40,7 +40,7 @@ func TestHTTPAPIClient_GetDevice_Success(t *testing.T) {
 	client := &httpAPIClient{
 		baseURL:    srv.URL + "/api/v2",
 		httpClient: srv.Client(),
-		tokenFunc:  func() (string, error) { return "test-token", nil },
+		tokenFunc:  func(context.Context) (string, error) { return "test-token", nil },
 	}
 
 	device, err := client.GetDevice(context.Background(), "node123")
@@ -81,7 +81,7 @@ func TestHTTPAPIClient_GetDevice_NotFound(t *testing.T) {
 	client := &httpAPIClient{
 		baseURL:    srv.URL + "/api/v2",
 		httpClient: srv.Client(),
-		tokenFunc:  func() (string, error) { return "test-token", nil },
+		tokenFunc:  func(context.Context) (string, error) { return "test-token", nil },
 	}
 
 	_, err := client.GetDevice(context.Background(), "nonexistent")
@@ -103,7 +103,7 @@ func TestHTTPAPIClient_GetDevice_ServerError(t *testing.T) {
 	client := &httpAPIClient{
 		baseURL:    srv.URL + "/api/v2",
 		httpClient: srv.Client(),
-		tokenFunc:  func() (string, error) { return "test-token", nil },
+		tokenFunc:  func(context.Context) (string, error) { return "test-token", nil },
 	}
 
 	_, err := client.GetDevice(context.Background(), "node123")
@@ -116,7 +116,7 @@ func TestHTTPAPIClient_GetDevice_TokenError(t *testing.T) {
 	client := &httpAPIClient{
 		baseURL:    "http://unused",
 		httpClient: http.DefaultClient,
-		tokenFunc:  func() (string, error) { return "", errors.New("token expired") },
+		tokenFunc:  func(context.Context) (string, error) { return "", errors.New("token expired") },
 	}
 
 	_, err := client.GetDevice(context.Background(), "node123")
@@ -138,7 +138,7 @@ func TestHTTPAPIClient_GetDevice_MalformedJSON(t *testing.T) {
 	client := &httpAPIClient{
 		baseURL:    srv.URL + "/api/v2",
 		httpClient: srv.Client(),
-		tokenFunc:  func() (string, error) { return "test-token", nil },
+		tokenFunc:  func(context.Context) (string, error) { return "test-token", nil },
 	}
 
 	_, err := client.GetDevice(context.Background(), "node123")
@@ -162,7 +162,7 @@ func TestHTTPAPIClient_GetDevice_PathEscaping(t *testing.T) {
 	client := &httpAPIClient{
 		baseURL:    srv.URL + "/api/v2",
 		httpClient: srv.Client(),
-		tokenFunc:  func() (string, error) { return "test-token", nil },
+		tokenFunc:  func(context.Context) (string, error) { return "test-token", nil },
 	}
 
 	_, _ = client.GetDevice(context.Background(), "../tailnet/evil")
@@ -185,7 +185,7 @@ func TestHTTPAPIClient_GetDevice_DefaultBaseURL(t *testing.T) {
 	client := &httpAPIClient{
 		baseURL:    "", // should fall back to defaultAPIBase
 		httpClient: &http.Client{},
-		tokenFunc:  func() (string, error) { return "test-token", nil },
+		tokenFunc:  func(context.Context) (string, error) { return "test-token", nil },
 	}
 
 	// This will fail to connect, but the error should reference the default URL.

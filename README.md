@@ -235,6 +235,7 @@ docker run -d \
 package main
 
 import (
+    "context"
     "fmt"
     "time"
 
@@ -242,10 +243,11 @@ import (
 )
 
 func main() {
+    ctx := context.Background()
     oauth := authkey.NewOAuthClient("client-id", "client-secret")
     fetcher := authkey.NewFetcher(oauth.Token)
 
-    resp, err := fetcher.CreateAuthKey(authkey.AuthKeyRequest{
+    resp, err := fetcher.CreateAuthKey(ctx, authkey.AuthKeyRequest{
         Tailnet:       "example.com",
         Ephemeral:     true,
         Preauthorized: true,

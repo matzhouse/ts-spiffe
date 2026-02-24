@@ -39,11 +39,11 @@ type httpAPIClient struct {
 	baseURL    string
 	// tokenFunc returns a current Bearer token. This allows both static API keys
 	// and OAuth token refresh.
-	tokenFunc func() (string, error)
+	tokenFunc func(context.Context) (string, error)
 }
 
 func (c *httpAPIClient) GetDevice(ctx context.Context, nodeID string) (*DeviceInfo, error) {
-	token, err := c.tokenFunc()
+	token, err := c.tokenFunc(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get API token: %w", err)
 	}

@@ -86,13 +86,13 @@ func (p *Plugin) Configure(_ context.Context, req *configv1.ConfigureRequest) (*
 
 	// Only create a real API client if one hasn't been injected (for testing).
 	if p.apiClient == nil {
-		var tokenFunc func() (string, error)
+		var tokenFunc func(context.Context) (string, error)
 		if cfg.OAuthClientID != "" {
 			oc := authkey.NewOAuthClient(cfg.OAuthClientID, cfg.OAuthClientSecret)
 			tokenFunc = oc.Token
 		} else {
 			apiKey := cfg.APIKey
-			tokenFunc = func() (string, error) { return apiKey, nil }
+			tokenFunc = func(context.Context) (string, error) { return apiKey, nil }
 		}
 		p.apiClient = &httpAPIClient{
 			httpClient: &http.Client{Timeout: defaultHTTPTimeout},

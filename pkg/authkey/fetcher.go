@@ -2,6 +2,7 @@ package authkey
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,7 +34,7 @@ type AuthKeyResponse struct {
 
 // Fetcher creates Tailscale auth keys via the API.
 type Fetcher struct {
-	tokenFunc  func() (string, error)
+	tokenFunc  func(context.Context) (string, error)
 	httpClient *http.Client
 	apiBase    string
 }
@@ -52,7 +53,7 @@ func WithFetcherHTTPClient(hc *http.Client) FetcherOption {
 }
 
 // NewFetcher creates a Fetcher that uses the given token function for auth.
-func NewFetcher(tokenFunc func() (string, error), opts ...FetcherOption) *Fetcher {
+func NewFetcher(tokenFunc func(context.Context) (string, error), opts ...FetcherOption) *Fetcher {
 	f := &Fetcher{
 		tokenFunc:  tokenFunc,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
@@ -86,8 +87,8 @@ type apiDeviceCreate struct {
 }
 
 // CreateAuthKey creates a new Tailscale auth key with the given parameters.
-func (f *Fetcher) CreateAuthKey(req AuthKeyRequest) (*AuthKeyResponse, error) {
-	token, err := f.tokenFunc()
+func (f *Fetcher) CreateAuthKey(ctx context.Context, req AuthKeyRequest) (*AuthKeyResponse, error) {
+	token, err := f.tokenFunc(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get API token: %w", err)
 	}
@@ -122,7 +123,7 @@ func (f *Fetcher) CreateAuthKey(req AuthKeyRequest) (*AuthKeyResponse, error) {
 	}
 
 	reqURL := fmt.Sprintf("%s/tailnet/%s/keys", f.apiBase, url.PathEscape(tailnet))
-	httpReq, err := http.NewRequest(http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}

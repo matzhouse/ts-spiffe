@@ -1,6 +1,7 @@
 package authkey
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -40,7 +41,7 @@ func TestOAuthClient_Token_Success(t *testing.T) {
 		WithHTTPClient(srv.Client()),
 	)
 
-	token, err := client.Token()
+	token, err := client.Token(context.Background())
 	if err != nil {
 		t.Fatalf("Token() failed: %v", err)
 	}
@@ -49,7 +50,7 @@ func TestOAuthClient_Token_Success(t *testing.T) {
 	}
 
 	// Second call should use cached token.
-	token2, err := client.Token()
+	token2, err := client.Token(context.Background())
 	if err != nil {
 		t.Fatalf("Token() cached call failed: %v", err)
 	}
@@ -79,14 +80,14 @@ func TestOAuthClient_Token_ExpiryTriggersRefresh(t *testing.T) {
 	)
 
 	// First call fetches.
-	_, err := client.Token()
+	_, err := client.Token(context.Background())
 	if err != nil {
 		t.Fatalf("first Token() failed: %v", err)
 	}
 
 	// With ExpiresIn=1, the 30s buffer means the token is immediately considered
 	// near-expiry, so the second call should fetch again.
-	_, err = client.Token()
+	_, err = client.Token(context.Background())
 	if err != nil {
 		t.Fatalf("second Token() failed: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestOAuthClient_Token_DefaultExpiryWhenZero(t *testing.T) {
 		WithHTTPClient(srv.Client()),
 	)
 
-	token, err := client.Token()
+	token, err := client.Token(context.Background())
 	if err != nil {
 		t.Fatalf("Token() failed: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestOAuthClient_Token_ServerError(t *testing.T) {
 		WithHTTPClient(srv.Client()),
 	)
 
-	_, err := client.Token()
+	_, err := client.Token(context.Background())
 	if err == nil {
 		t.Fatal("expected error for 401, got nil")
 	}
@@ -159,7 +160,7 @@ func TestOAuthClient_Token_EmptyAccessToken(t *testing.T) {
 		WithHTTPClient(srv.Client()),
 	)
 
-	_, err := client.Token()
+	_, err := client.Token(context.Background())
 	if err == nil {
 		t.Fatal("expected error for empty access_token, got nil")
 	}
@@ -177,7 +178,7 @@ func TestOAuthClient_Token_MalformedJSON(t *testing.T) {
 		WithHTTPClient(srv.Client()),
 	)
 
-	_, err := client.Token()
+	_, err := client.Token(context.Background())
 	if err == nil {
 		t.Fatal("expected error for malformed JSON, got nil")
 	}
