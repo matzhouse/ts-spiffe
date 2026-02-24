@@ -6,22 +6,28 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"time"
 )
 
-const tailscaleAPIBase = "https://api.tailscale.com/api/v2"
+const defaultAPIBase = "https://api.tailscale.com/api/v2"
+
+// defaultHTTPClient is used for all outbound HTTP calls. It has a reasonable
+// timeout to prevent indefinite hangs against the Tailscale API.
+var defaultHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 // DeviceInfo represents the relevant fields from the Tailscale API device response.
 type DeviceInfo struct {
-	ID         string   `json:"id"`
-	NodeKey    string   `json:"nodeKey"`
-	Hostname   string   `json:"hostname"`
-	Name       string   `json:"name"`
-	OS         string   `json:"os"`
-	Authorized bool     `json:"authorized"`
-	Tags       []string `json:"tags"`
-	TailnetID  string   `json:"tailnetId"`
-	User       string   `json:"user"`
-	Addresses  []string `json:"addresses"`
+	ID          string   `json:"id"`
+	NodeKey     string   `json:"nodeKey"`
+	Hostname    string   `json:"hostname"`
+	Name        string   `json:"name"`
+	OS          string   `json:"os"`
+	Authorized  bool     `json:"authorized"`
+	Tags        []string `json:"tags"`
+	TailnetName string   `json:"tailnetName"`
+	User        string   `json:"user"`
+	Addresses   []string `json:"addresses"`
 }
 
 // TailscaleAPIClient abstracts the Tailscale control plane API for testing.
@@ -32,6 +38,7 @@ type TailscaleAPIClient interface {
 // httpAPIClient is the production implementation that calls the Tailscale API.
 type httpAPIClient struct {
 	httpClient *http.Client
+	baseURL    string
 	// tokenFunc returns a current Bearer token. This allows both static API keys
 	// and OAuth token refresh.
 	tokenFunc func() (string, error)
@@ -43,8 +50,13 @@ func (c *httpAPIClient) GetDevice(ctx context.Context, nodeID string) (*DeviceIn
 		return nil, fmt.Errorf("failed to get API token: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/device/%s", tailscaleAPIBase, nodeID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	base := c.baseURL
+	if base == "" {
+		base = defaultAPIBase
+	}
+
+	reqURL := fmt.Sprintf("%s/device/%s", base, url.PathEscape(nodeID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -56,7 +68,7 @@ func (c *httpAPIClient) GetDevice(ctx context.Context, nodeID string) (*DeviceIn
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB limit
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}

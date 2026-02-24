@@ -10,12 +10,13 @@ import (
 
 func TestHTTPAPIClient_GetDevice_Success(t *testing.T) {
 	expected := &DeviceInfo{
-		ID:         "node123",
-		NodeKey:    "nodekey:abc123",
-		Hostname:   "myhost",
-		Authorized: true,
-		Tags:       []string{"tag:web"},
-		Addresses:  []string{"100.64.0.1"},
+		ID:          "node123",
+		NodeKey:     "nodekey:abc123",
+		Hostname:    "myhost",
+		Authorized:  true,
+		Tags:        []string{"tag:web"},
+		TailnetName: "example.com",
+		Addresses:   []string{"100.64.0.1"},
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -31,8 +32,7 @@ func TestHTTPAPIClient_GetDevice_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Override the API base URL by wrapping the client.
-	client := &testableHTTPAPIClient{
+	client := &httpAPIClient{
 		baseURL:    srv.URL + "/api/v2",
 		httpClient: srv.Client(),
 		tokenFunc:  func() (string, error) { return "test-token", nil },
@@ -52,6 +52,9 @@ func TestHTTPAPIClient_GetDevice_Success(t *testing.T) {
 	if !device.Authorized {
 		t.Error("expected Authorized = true")
 	}
+	if device.TailnetName != "example.com" {
+		t.Errorf("TailnetName = %q, want %q", device.TailnetName, "example.com")
+	}
 }
 
 func TestHTTPAPIClient_GetDevice_NotFound(t *testing.T) {
@@ -61,7 +64,7 @@ func TestHTTPAPIClient_GetDevice_NotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &testableHTTPAPIClient{
+	client := &httpAPIClient{
 		baseURL:    srv.URL + "/api/v2",
 		httpClient: srv.Client(),
 		tokenFunc:  func() (string, error) { return "test-token", nil },
@@ -73,48 +76,23 @@ func TestHTTPAPIClient_GetDevice_NotFound(t *testing.T) {
 	}
 }
 
-// testableHTTPAPIClient allows overriding the base URL for tests.
-type testableHTTPAPIClient struct {
-	baseURL    string
-	httpClient *http.Client
-	tokenFunc  func() (string, error)
-}
+func TestHTTPAPIClient_GetDevice_PathEscaping(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A malicious nodeID like "../tailnet/evil" should be escaped,
+		// so the path should contain the escaped form, not a traversal.
+		if r.URL.Path == "/api/v2/tailnet/evil" {
+			t.Error("path traversal was not prevented")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(&DeviceInfo{ID: "safe"})
+	}))
+	defer srv.Close()
 
-func (c *testableHTTPAPIClient) GetDevice(ctx context.Context, nodeID string) (*DeviceInfo, error) {
-	// Reuse the same logic as httpAPIClient but with custom base URL.
-	token, err := c.tokenFunc()
-	if err != nil {
-		return nil, err
+	client := &httpAPIClient{
+		baseURL:    srv.URL + "/api/v2",
+		httpClient: srv.Client(),
+		tokenFunc:  func() (string, error) { return "test-token", nil },
 	}
 
-	url := c.baseURL + "/device/" + nodeID
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, &apiError{StatusCode: resp.StatusCode}
-	}
-
-	var device DeviceInfo
-	if err := json.NewDecoder(resp.Body).Decode(&device); err != nil {
-		return nil, err
-	}
-	return &device, nil
-}
-
-type apiError struct {
-	StatusCode int
-}
-
-func (e *apiError) Error() string {
-	return http.StatusText(e.StatusCode)
+	_, _ = client.GetDevice(context.Background(), "../tailnet/evil")
 }

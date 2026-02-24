@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -53,7 +54,7 @@ func WithFetcherHTTPClient(hc *http.Client) FetcherOption {
 func NewFetcher(tokenFunc func() (string, error), opts ...FetcherOption) *Fetcher {
 	f := &Fetcher{
 		tokenFunc:  tokenFunc,
-		httpClient: http.DefaultClient,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 		apiBase:    defaultAPIBase,
 	}
 	for _, opt := range opts {
@@ -116,8 +117,8 @@ func (f *Fetcher) CreateAuthKey(req AuthKeyRequest) (*AuthKeyResponse, error) {
 		return nil, fmt.Errorf("failed to marshal key request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/tailnet/%s/keys", f.apiBase, tailnet)
-	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(bodyBytes))
+	reqURL := fmt.Sprintf("%s/tailnet/%s/keys", f.apiBase, url.PathEscape(tailnet))
+	httpReq, err := http.NewRequest(http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}

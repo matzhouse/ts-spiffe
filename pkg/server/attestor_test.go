@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/matzhouse/ts-spiffe/pkg/common"
@@ -62,8 +63,25 @@ func configurePlugin(t *testing.T, p *Plugin, hclConfig string) {
 	}
 }
 
-func TestAttest_Success(t *testing.T) {
-	payload := common.AttestationPayload{
+// fullDevice returns a DeviceInfo with all fields populated for testing.
+func fullDevice() *DeviceInfo {
+	return &DeviceInfo{
+		ID:          "node123",
+		NodeKey:     "nodekey:abc123",
+		Hostname:    "myhost",
+		Name:        "myhost.example.ts.net.",
+		OS:          "linux",
+		Authorized:  true,
+		Tags:        []string{"tag:web", "tag:prod"},
+		TailnetName: "example.com",
+		User:        "user@example.com",
+		Addresses:   []string{"100.64.0.1"},
+	}
+}
+
+// fullPayload returns an AttestationPayload matching fullDevice() for testing.
+func fullPayload() common.AttestationPayload {
+	return common.AttestationPayload{
 		NodeID:       "node123",
 		NodeKey:      "nodekey:abc123",
 		Hostname:     "myhost",
@@ -74,14 +92,10 @@ func TestAttest_Success(t *testing.T) {
 		Tags:         []string{"tag:web", "tag:prod"},
 		TailscaleIPs: []string{"100.64.0.1"},
 	}
+}
 
-	mock := &mockAPIClient{
-		device: &DeviceInfo{
-			ID:         "node123",
-			NodeKey:    "nodekey:abc123",
-			Authorized: true,
-		},
-	}
+func TestAttest_Success(t *testing.T) {
+	mock := &mockAPIClient{device: fullDevice()}
 
 	p := &Plugin{apiClient: mock}
 	configurePlugin(t, p, `api_key = "tskey-api-test"`)
@@ -90,7 +104,7 @@ func TestAttest_Success(t *testing.T) {
 		ctx: context.Background(),
 		request: &serverv1.AttestRequest{
 			Request: &serverv1.AttestRequest_Payload{
-				Payload: makePayload(t, payload),
+				Payload: makePayload(t, fullPayload()),
 			},
 		},
 	}
@@ -117,7 +131,7 @@ func TestAttest_Success(t *testing.T) {
 		t.Error("expected CanReattest = false (TOFU default)")
 	}
 
-	// Check selectors.
+	// Check selectors are derived from API-verified DeviceInfo.
 	selectorMap := make(map[string]bool)
 	for _, s := range attrs.SelectorValues {
 		selectorMap[s] = true
@@ -127,7 +141,7 @@ func TestAttest_Success(t *testing.T) {
 		"hostname:myhost",
 		"os:linux",
 		"tailnet:example.com",
-		"user:42",
+		"user:user@example.com",
 		"node_id:node123",
 		"tag:tag:web",
 		"tag:tag:prod",
@@ -137,6 +151,62 @@ func TestAttest_Success(t *testing.T) {
 		if !selectorMap[s] {
 			t.Errorf("missing selector %q", s)
 		}
+	}
+}
+
+func TestAttest_SelectorsFromAPINotPayload(t *testing.T) {
+	// The agent payload claims different values than the API response.
+	// Selectors must come from the API (DeviceInfo), not the payload.
+	payload := common.AttestationPayload{
+		NodeID:       "node123",
+		NodeKey:      "nodekey:abc123",
+		Hostname:     "agent-claimed-host",
+		OS:           "agent-claimed-os",
+		TailnetName:  "agent-claimed-tailnet",
+		UserID:       "999",
+		Tags:         []string{"tag:agent-claimed"},
+		TailscaleIPs: []string{"10.0.0.1"},
+	}
+
+	mock := &mockAPIClient{device: fullDevice()}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	stream := &fakeAttestStream{
+		ctx: context.Background(),
+		request: &serverv1.AttestRequest{
+			Request: &serverv1.AttestRequest_Payload{
+				Payload: makePayload(t, payload),
+			},
+		},
+	}
+
+	if err := p.Attest(stream); err != nil {
+		t.Fatalf("Attest failed: %v", err)
+	}
+
+	attrs := stream.sent[0].GetAgentAttributes()
+	selectorMap := make(map[string]bool)
+	for _, s := range attrs.SelectorValues {
+		selectorMap[s] = true
+	}
+
+	// Must have API-verified values, not agent-claimed values.
+	if selectorMap["hostname:agent-claimed-host"] {
+		t.Error("selector should not contain agent-claimed hostname")
+	}
+	if !selectorMap["hostname:myhost"] {
+		t.Error("selector should contain API-verified hostname 'myhost'")
+	}
+	if selectorMap["os:agent-claimed-os"] {
+		t.Error("selector should not contain agent-claimed OS")
+	}
+	if !selectorMap["os:linux"] {
+		t.Error("selector should contain API-verified OS 'linux'")
+	}
+	if !selectorMap["user:user@example.com"] {
+		t.Error("selector should contain API-verified user")
 	}
 }
 
@@ -169,6 +239,45 @@ func TestAttest_NodeKeyMismatch(t *testing.T) {
 	err := p.Attest(stream)
 	if err == nil {
 		t.Fatal("expected error for node key mismatch, got nil")
+	}
+	// Must not leak actual key values in the error message.
+	if strings.Contains(err.Error(), "nodekey:DIFFERENT") {
+		t.Error("error message must not contain the actual API node key")
+	}
+	if strings.Contains(err.Error(), "nodekey:abc123") {
+		t.Error("error message must not contain the agent-claimed node key")
+	}
+}
+
+func TestAttest_EmptyNodeKey(t *testing.T) {
+	payload := common.AttestationPayload{
+		NodeID:  "node123",
+		NodeKey: "",
+	}
+
+	mock := &mockAPIClient{
+		device: &DeviceInfo{
+			ID:         "node123",
+			NodeKey:    "nodekey:abc123",
+			Authorized: true,
+		},
+	}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	stream := &fakeAttestStream{
+		ctx: context.Background(),
+		request: &serverv1.AttestRequest{
+			Request: &serverv1.AttestRequest_Payload{
+				Payload: makePayload(t, payload),
+			},
+		},
+	}
+
+	err := p.Attest(stream)
+	if err == nil {
+		t.Fatal("expected error for empty node key, got nil")
 	}
 }
 
@@ -205,17 +314,20 @@ func TestAttest_UnauthorizedDevice(t *testing.T) {
 }
 
 func TestAttest_TailnetNotAllowed(t *testing.T) {
+	// Agent claims "evil.com" but the API returns a different tailnet.
+	// The allow list check must use the API-verified tailnet.
 	payload := common.AttestationPayload{
 		NodeID:      "node123",
 		NodeKey:     "nodekey:abc123",
-		TailnetName: "evil.com",
+		TailnetName: "good.com", // agent lies, claiming an allowed tailnet
 	}
 
 	mock := &mockAPIClient{
 		device: &DeviceInfo{
-			ID:         "node123",
-			NodeKey:    "nodekey:abc123",
-			Authorized: true,
+			ID:          "node123",
+			NodeKey:     "nodekey:abc123",
+			Authorized:  true,
+			TailnetName: "evil.com", // API says the real tailnet is evil.com
 		},
 	}
 
@@ -240,13 +352,42 @@ func TestAttest_TailnetNotAllowed(t *testing.T) {
 	}
 }
 
-func TestAttest_AllowReattestation(t *testing.T) {
+func TestAttest_TailnetAllowed(t *testing.T) {
 	payload := common.AttestationPayload{
-		NodeID:      "node123",
-		NodeKey:     "nodekey:abc123",
-		TailnetName: "example.com",
+		NodeID:  "node123",
+		NodeKey: "nodekey:abc123",
 	}
 
+	mock := &mockAPIClient{
+		device: &DeviceInfo{
+			ID:          "node123",
+			NodeKey:     "nodekey:abc123",
+			Authorized:  true,
+			TailnetName: "good.com",
+		},
+	}
+
+	p := &Plugin{apiClient: mock}
+	configurePlugin(t, p, `
+		api_key = "tskey-api-test"
+		tailnet_allow_list = ["good.com"]
+	`)
+
+	stream := &fakeAttestStream{
+		ctx: context.Background(),
+		request: &serverv1.AttestRequest{
+			Request: &serverv1.AttestRequest_Payload{
+				Payload: makePayload(t, payload),
+			},
+		},
+	}
+
+	if err := p.Attest(stream); err != nil {
+		t.Fatalf("Attest should succeed for allowed tailnet: %v", err)
+	}
+}
+
+func TestAttest_AllowReattestation(t *testing.T) {
 	mock := &mockAPIClient{
 		device: &DeviceInfo{
 			ID:         "node123",
@@ -265,7 +406,10 @@ func TestAttest_AllowReattestation(t *testing.T) {
 		ctx: context.Background(),
 		request: &serverv1.AttestRequest{
 			Request: &serverv1.AttestRequest_Payload{
-				Payload: makePayload(t, payload),
+				Payload: makePayload(t, common.AttestationPayload{
+					NodeID:  "node123",
+					NodeKey: "nodekey:abc123",
+				}),
 			},
 		},
 	}

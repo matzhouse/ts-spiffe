@@ -10,7 +10,11 @@ import (
 	"time"
 )
 
-const defaultTokenURL = "https://api.tailscale.com/api/v2/oauth/token"
+const defaultTokenURL = "https://api.tailscale.com/api/v2/oauth/token" //nolint:gosec // not a credential
+
+// defaultHTTPTimeout is applied to all outbound HTTP clients to prevent
+// indefinite hangs against the Tailscale API.
+const defaultHTTPTimeout = 30 * time.Second
 
 // OAuthClient handles OAuth2 client credentials flow for the Tailscale API.
 type OAuthClient struct {
@@ -43,7 +47,7 @@ func NewOAuthClient(clientID, clientSecret string, opts ...OAuthOption) *OAuthCl
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		tokenURL:     defaultTokenURL,
-		httpClient:   http.DefaultClient,
+		httpClient:   &http.Client{Timeout: defaultHTTPTimeout},
 	}
 	for _, opt := range opts {
 		opt(c)
