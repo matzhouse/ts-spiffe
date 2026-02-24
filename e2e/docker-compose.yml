@@ -1,0 +1,41 @@
+services:
+  mock-tailscale:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile
+      target: mock-tailscale
+    volumes:
+      - tailscale-sock:/var/run/tailscale
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  spire-server:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile
+      target: spire-server
+    depends_on:
+      mock-tailscale:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-server", "healthcheck"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  spire-agent:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile
+      target: spire-agent
+    depends_on:
+      spire-server:
+        condition: service_healthy
+    volumes:
+      - tailscale-sock:/var/run/tailscale
+
+volumes:
+  tailscale-sock:

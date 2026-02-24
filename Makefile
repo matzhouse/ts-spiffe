@@ -1,6 +1,6 @@
 BINDIR := bin
 
-.PHONY: all build build-agent build-server build-authkey test lint clean checksums
+.PHONY: all build build-agent build-server build-authkey test lint clean checksums e2e
 
 all: build
 
@@ -26,3 +26,6 @@ clean:
 
 checksums: build
 	cd $(BINDIR) && shasum -a 256 * > checksums.txt
+
+e2e:
+	./e2e/run-e2e.sh

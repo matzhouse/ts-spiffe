@@ -37,6 +37,10 @@ type Config struct {
 
 	// AllowReattestation controls whether a node can re-attest (default: false = TOFU).
 	AllowReattestation bool `hcl:"allow_reattestation"`
+
+	// APIBaseURL overrides the Tailscale API base URL (e.g. for testing).
+	// When empty, defaults to https://api.tailscale.com/api/v2.
+	APIBaseURL string `hcl:"api_base_url"`
 }
 
 // Plugin implements the SPIRE server-side node attestor.
@@ -48,6 +52,7 @@ type Plugin struct {
 	config *Config
 	logger hclog.Logger
 
+	trustDomain  string
 	apiClient    TailscaleAPIClient
 	pathTemplate *template.Template
 }
@@ -79,9 +84,16 @@ func (p *Plugin) Configure(_ context.Context, req *configv1.ConfigureRequest) (*
 		return nil, status.Errorf(codes.InvalidArgument, "invalid agent_path_template: %v", err)
 	}
 
+	// Extract trust domain from core configuration.
+	var trustDomain string
+	if req.CoreConfiguration != nil {
+		trustDomain = req.CoreConfiguration.TrustDomain
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.config = cfg
+	p.trustDomain = trustDomain
 	p.pathTemplate = tmpl
 
 	// Only create a real API client if one hasn't been injected (for testing).
@@ -96,6 +108,7 @@ func (p *Plugin) Configure(_ context.Context, req *configv1.ConfigureRequest) (*
 		}
 		p.apiClient = &httpAPIClient{
 			httpClient: &http.Client{Timeout: defaultHTTPTimeout},
+			baseURL:    cfg.APIBaseURL,
 			tokenFunc:  tokenFunc,
 		}
 	}
@@ -136,6 +149,7 @@ func newVerifiedNodeData(device *DeviceInfo) *verifiedNodeData {
 func (p *Plugin) Attest(stream serverv1.NodeAttestor_AttestServer) error {
 	p.mu.RLock()
 	config := p.config
+	trustDomain := p.trustDomain
 	apiClient := p.apiClient
 	pathTemplate := p.pathTemplate
 	p.mu.RUnlock()
@@ -214,6 +228,10 @@ func (p *Plugin) Attest(stream serverv1.NodeAttestor_AttestServer) error {
 		return status.Errorf(codes.Internal, "agent path template produced invalid SPIFFE ID path: %q", agentPath)
 	}
 
+	// Construct the full SPIFFE ID URI. SPIRE expects the complete URI
+	// (spiffe://trust-domain/path) in the AgentAttributes response.
+	agentID := "spiffe://" + trustDomain + agentPath
+
 	// Build selectors from API-verified device data.
 	var selectors []string
 	if verified.Hostname != "" {
@@ -241,7 +259,7 @@ func (p *Plugin) Attest(stream serverv1.NodeAttestor_AttestServer) error {
 	if err := stream.Send(&serverv1.AttestResponse{
 		Response: &serverv1.AttestResponse_AgentAttributes{
 			AgentAttributes: &serverv1.AgentAttributes{
-				SpiffeId:       agentPath,
+				SpiffeId:       agentID,
 				SelectorValues: selectors,
 				CanReattest:    config.AllowReattestation,
 			},

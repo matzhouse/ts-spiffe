@@ -66,6 +66,9 @@ func makePayload(t *testing.T, p common.AttestationPayload) []byte {
 func configurePlugin(t *testing.T, p *Plugin, hclConfig string) {
 	t.Helper()
 	_, err := p.Configure(context.Background(), &configv1.ConfigureRequest{
+		CoreConfiguration: &configv1.CoreConfiguration{
+			TrustDomain: "example.org",
+		},
 		HclConfiguration: hclConfig,
 	})
 	if err != nil {
@@ -137,9 +140,9 @@ func TestAttest_Success(t *testing.T) {
 		t.Fatal("expected AgentAttributes, got nil")
 	}
 
-	expectedPath := "/spire/agent/tailscale/example.com/node123"
-	if attrs.SpiffeId != expectedPath {
-		t.Errorf("SpiffeId = %q, want %q", attrs.SpiffeId, expectedPath)
+	expectedID := "spiffe://example.org/spire/agent/tailscale/example.com/node123"
+	if attrs.SpiffeId != expectedID {
+		t.Errorf("SpiffeId = %q, want %q", attrs.SpiffeId, expectedID)
 	}
 
 	if attrs.CanReattest {
@@ -292,7 +295,7 @@ func TestAttest_CustomPathTemplate(t *testing.T) {
 	}
 
 	attrs := stream.sent[0].GetAgentAttributes()
-	expected := "/custom/myhost/node123"
+	expected := "spiffe://example.org/custom/myhost/node123"
 	if attrs.SpiffeId != expected {
 		t.Errorf("SpiffeId = %q, want %q", attrs.SpiffeId, expected)
 	}
@@ -319,8 +322,9 @@ func TestAttest_TemplateUsesAPIData(t *testing.T) {
 	}
 
 	attrs := stream.sent[0].GetAgentAttributes()
-	if attrs.SpiffeId != "/spire/agent/api-host" {
-		t.Errorf("SpiffeId = %q, want /spire/agent/api-host", attrs.SpiffeId)
+	expectedID := "spiffe://example.org/spire/agent/api-host"
+	if attrs.SpiffeId != expectedID {
+		t.Errorf("SpiffeId = %q, want %q", attrs.SpiffeId, expectedID)
 	}
 }
 
@@ -707,6 +711,42 @@ func TestConfigure_InvalidHCL(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid HCL, got nil")
+	}
+}
+
+func TestConfigure_APIBaseURL(t *testing.T) {
+	p := &Plugin{}
+	configurePlugin(t, p, `
+		api_key = "tskey-api-test"
+		api_base_url = "http://mock:8080/api/v2"
+	`)
+
+	if p.config.APIBaseURL != "http://mock:8080/api/v2" {
+		t.Errorf("APIBaseURL = %q, want %q", p.config.APIBaseURL, "http://mock:8080/api/v2")
+	}
+
+	// Verify the httpAPIClient was created with the custom base URL.
+	hc, ok := p.apiClient.(*httpAPIClient)
+	if !ok {
+		t.Fatal("expected apiClient to be *httpAPIClient")
+	}
+	if hc.baseURL != "http://mock:8080/api/v2" {
+		t.Errorf("httpAPIClient.baseURL = %q, want %q", hc.baseURL, "http://mock:8080/api/v2")
+	}
+}
+
+func TestConfigure_APIBaseURLEmpty(t *testing.T) {
+	p := &Plugin{}
+	configurePlugin(t, p, `api_key = "tskey-api-test"`)
+
+	// When api_base_url is not set, the httpAPIClient's baseURL should be empty
+	// (falls back to defaultAPIBase at request time).
+	hc, ok := p.apiClient.(*httpAPIClient)
+	if !ok {
+		t.Fatal("expected apiClient to be *httpAPIClient")
+	}
+	if hc.baseURL != "" {
+		t.Errorf("httpAPIClient.baseURL = %q, want empty string", hc.baseURL)
 	}
 }
 
