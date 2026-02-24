@@ -237,6 +237,20 @@ Expires at        : ...
 
 This option runs SPIRE and the plugins in containers. Each container joins the tailnet using Tailscale's container support.
 
+### Why a Tailscale Sidecar?
+
+The container deployment runs Tailscale as a separate sidecar container alongside each SPIRE container, rather than bundling them into a single image. This is worth understanding because the architecture may not be immediately obvious.
+
+**Shared network namespace.** Each SPIRE container uses `network_mode: "service:ts-*"` to share the Tailscale sidecar's network stack. This gives the SPIRE process a Tailscale IP and DNS name without running `tailscaled` itself.
+
+**Socket access for attestation.** The agent plugin needs to query `tailscaled`'s Unix socket to read node identity. The Tailscale sidecar creates that socket in a shared volume, and the SPIRE agent container mounts it read-only.
+
+**Separation of concerns.** Tailscale handles networking and node identity; SPIRE handles attestation and SVID issuance. Each can be upgraded, restarted, or debugged independently without rebuilding a combined image.
+
+**No custom base images.** You use the upstream `tailscale/tailscale` and `ghcr.io/spiffe/spire-*` images as-is. The only custom build step is copying the plugin binaries into the SPIRE images.
+
+The alternative — installing Tailscale directly inside the SPIRE containers — would require a custom entrypoint that starts `tailscaled` before SPIRE, adding `CAP_NET_ADMIN` to the SPIRE container, and coupling both lifecycles together. The sidecar approach avoids all of that.
+
 ### B.1 Project Structure
 
 Create the following directory structure for your deployment:
