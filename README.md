@@ -1,5 +1,7 @@
 # ts-spiffe
 
+> **EXPERIMENTAL**: This project is in early development and not yet recommended for production use. APIs, configuration, and behavior may change without notice.
+
 SPIFFE node attestation for [Tailscale](https://tailscale.com). A [SPIRE](https://spiffe.io/docs/latest/spire-about/) node attestor plugin that uses Tailscale node identity to issue SPIFFE IDs, plus a CLI tool for generating Tailscale auth keys for containers.
 
 ## How It Works
