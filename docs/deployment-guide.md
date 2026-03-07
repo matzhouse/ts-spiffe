@@ -1,5 +1,7 @@
 # Deploying ts-spiffe on a Real Tailnet
 
+> **EXPERIMENTAL**: This project is in early development and not yet recommended for production use. APIs, configuration, and behavior may change without notice.
+
 This guide walks through deploying the SPIRE Tailscale node attestation plugins on a production Tailnet. Both bare metal and container-based deployments are covered.
 
 ## Prerequisites
